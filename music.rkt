@@ -71,12 +71,12 @@
     (merge (realize1 k e env) acc)))
 
 (define FPS 44100)
-(define ->frames (* FPS _))
+(define ->frames (compose round (* FPS _)))
 
 (define/match* (perform1 (coord (app ->frames start) (app ->frames end)) expr sound)
   (syntax-parse expr
-    [({~literal tone} p:number)
-     (define freq (syntax->datum #'p))
+    [({~literal tone} p)
+     (define freq (eval #'p))
      (rs-overlay ((if (> start 0) (curry rs-append (silence start)) identity)
                   (make-tone freq .2 (- end start)))
                  sound)]
@@ -90,3 +90,4 @@
   (for*/fold ([acc (silence 1)])
              ([(k v) (in-dict comp)] [e v])
     (perform1 k e acc)))
+
