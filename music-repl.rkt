@@ -1,13 +1,15 @@
 #lang racket
-(require "music.rkt")
 
-(require (for-syntax syntax/parse) syntax/parse fancy-app match-plus rsound)
+(require (for-syntax syntax/parse "music.rkt") syntax/parse fancy-app match-plus rsound "music.rkt")
 
 (provide (rename-out [ti #%top-interaction]))
 
-(define score (box '()))
-(define layer (box '()))
-(define rendered (box (silence 1)))
+(define-for-syntax score (box '()))
+(define-for-syntax layer (box '()))
+
+(define rendered '())
+(define performance '())
+
 (define current-coord (box (coord 0 4)))
 
 (define frame-ctr
@@ -20,15 +22,18 @@
 (define-syntax ti
   (syntax-parser
     #:datum-literals (realize clear play loop stop show score layer coord)
+    ;; incrementally realize layer
     [(_ . realize)
-     #'(let ()
-         (define l (unbox layer))
-         (define s (unbox score))
-         (define l* (realize l s))
-         (define s* (merge l* s))
-         (set-box! score s*)
-         (set-box! layer '())
-         (set-box! rendered (perform s*)))]
+     (define l (unbox layer))
+     (define s (unbox score))
+     (define l* (realize l s))
+     (set-box! score (merge l* s))
+     #`(let ()
+         (define r (unbox render))
+         (define r* #,(render l* r))
+         (set-box! rendered (merge r *))
+         (define p (perform r* r))
+         (set-box! performed (merge p (unbox performed))))]
     [(_ . clear) #'(set-box! layer '())]
     [(_ . play) #'(begin (play (perform (unbox score))) (void))]
     [(_ . loop)
@@ -52,4 +57,3 @@
      #'(set-box! current-coord (coord (syntax->datum #'start) (syntax->datum #'end)))]
     [(_ . expr)
      #'(set-box! layer (merge1 (unbox current-coord) #'expr (unbox layer)))]))
-
