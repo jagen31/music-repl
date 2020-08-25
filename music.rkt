@@ -10,7 +10,6 @@
          FPS ->frames)
 
 (struct tone/s [pitch] #:transparent)
-(struct quo/s [music] #:transparent)
 (struct rest/s [] #:transparent)
 
 (module multi racket
@@ -42,10 +41,10 @@
                ([(k v) (in-dict comp1)] [e v])
       (merge1 k e acc))))
 
-(require 'multi (for-syntax 'multi))
+(require 'multi (for-syntax (except-in 'multi coord) (rename-in 'multi [coord scoord])))
 
 (define-for-syntax (realize1 c0ord expr env) 
-  (define/match* (flat (coord start end) expr)
+  (define/match* (flat (scoord start end) expr)
     (syntax-parse expr
       [({~datum in} [off-startp:number off-endp:number] exprs ...)
        (define end* (+ start (syntax->datum #'off-endp)))
@@ -54,15 +53,15 @@
           'realize
           (format "inner coordinate ends after outer. Max: ~s, Received: ~s" end end*)
           expr))
-       (foldr merge '() (map (flat (coord (+ start (syntax->datum #'off-startp)) end*) _)
+       (foldr merge '() (map (flat (scoord (+ start (syntax->datum #'off-startp)) end*) _)
                              (syntax->list #'(exprs ...))))]
-      [_ (list (list (coord start end) expr))]))
+      [_ (list (list (scoord start end) expr))]))
   
-  (define/match* (realize1 (coord start end) expr)
+  (define/match* (realize1 (scoord start end) expr)
     (syntax-parse expr 
       [({~datum loop} exprs ...)
        (define flattened
-         (foldr merge '() (map (flat (coord start end) _)
+         (foldr merge '() (map (flat (scoord start end) _)
                                (syntax->list #'(exprs ...)))))
        (define length (score-length flattened))
        (realize
@@ -74,11 +73,11 @@
         env)]
       [({~datum offset} n)
        (for/fold ([acc '()])
-                 ([(k v) (in-dict env)] #:when (within? k (coord start end)))
+                 ([(k v) (in-dict env)] #:when (within? k (scoord start end)))
          (define tones (filter (compose (eq? _'tone) car syntax->datum) v))
          (cons (cons k (map (syntax-parser [({~datum tone} expr*) #'(tone (+ expr* n))]) tones))
                acc))]
-      [_ (list (list (coord start end) expr))]))
+      [_ (list (list (scoord start end) expr))]))
   
   (define flattened (flat c0ord expr))
   (for*/fold ([acc '()])
@@ -100,7 +99,7 @@
   (for/fold ([acc '()] #:result #`(list #,@acc))
             ([(k v) (in-dict comp)])
     (match k
-      [(coord s e)
+      [(scoord s e)
        (cons #`(cons (coord #,s #,e) (list #,@(stx-map (render1 _ env) v))) acc)])))
 
 (define FPS 44100)
@@ -112,7 +111,6 @@
      (rs-overlay ((if (> start 0) (curry rs-append (silence start)) identity)
                   (make-tone freq .2 (- end start)))
                  sound)]
-    [(quo/s music) (rs-overlay (perform music env) sound)]
     [rest/s
      (rs-overlay ((if (> start 0) (curry rs-append (silence start)) identity)
                   (silence (- end start)))
@@ -124,39 +122,44 @@
              ([(k v) (in-dict comp)] [e v])
     (perform1 k e env acc)))
 
-(define-syntax music
+(define-syntax with-layer
   (syntax-parser
-    [(_ [start:number end:number] (exprs ...) ...)
-     (define layers (syntax->list #'((exprs ...) ...)))
-     #`(let ([env '()])
-         #,(let loop ([syntax-env '()] [layers layers])
-             (match layers
-               [(cons layer layers)
-                (define l (realize (list (cons (coord (syntax->datum #'start) (syntax->datum #'end)) (syntax->list layer))) syntax-env))
-                #`(let* ([r #,(render l syntax-env)])
-                    (merge r #,(loop (merge l syntax-env) layers)))]
-               [_ #''()])))]))
+    [(_ name [exprs ...] rest ...)
+     (with-syntax ([(exprs2 ...) (syntax-local-value #'name (λ () #'()))])
+       (println #'(exprs2 ...))
+       #'(let-syntax ([name #'((exprs ...) exprs2 ...)])
+           rest ...))]))
 
-(define (motif a b c d e)
-  (music [0 4]
-         [(in [0 .5] (tone a))
-          (in [.5 1] (tone b))
-          (in [1 1.5] (tone c))
-          (in [1.5 2] (tone d))
-          (in [2 2.5] (tone e))
-          (in [2.5 3] (tone c))
-          (in [3 3.5] (tone d))
-          (in [3.5 4] (tone e))]))
+(define-syntax assemble
+  (syntax-parser
+    [(_ name [start:number end:number])
+     (define comp (reverse (syntax->list (syntax-local-value #'name (λ () #'())))))
+     (println comp)
+     (render
+      (let loop ([syntax-env '()] [layers comp])
+        (match layers
+          [(cons layer layers)
+           (define l (realize (list (cons (scoord (syntax->datum #'start)
+                                                  (syntax->datum #'end))
+                                          (syntax->list layer)))
+                              syntax-env))
+           (define l* (dict-map l (λ (k v) (cons k v))))
+           (merge l* (loop (merge l syntax-env) layers))]
+          [_ '()]))
+      '())]))
 
-(define bach (music [0 8]
-                    [(loop (in [0 .5] (tone 440))
-                           (in [.5 1] (tone 550))
-                           (in [1 1.5] (tone 660))
-                           (in [1.5 2] (tone 880))
-                           (in [2 2.5] (tone 1100))
-                           (in [2.5 3] (tone 660))
-                           (in [3 3.5] (tone 880))
-                           (in [3.5 4] (tone 1100)))]
-                    [(offset -220)]
-                    [(offset -219)]))
+(define (bach a b c d e)
+  (with-layer snip
+    [(loop (in [0 .5] (tone a))
+           (in [.5 1] (tone b))
+           (in [1 1.5] (tone c))
+           (in [1.5 2] (tone d))
+           (in [2 2.5] (tone e))
+           (in [2.5 3] (tone c))
+           (in [3 3.5] (tone d))
+           (in [3.5 4] (tone e)))]
+         (with-layer snip
+           [(offset -210)]
+           (assemble snip [0 8]))))
 
+(play (perform (bach 440 550 660 880 1100) '()))
