@@ -13,9 +13,10 @@
          merge1 merge
          define-music
          assemble-score
-         (for-syntax realize render assemble*)
          perform1 perform
-         FPS ->frames)
+         FPS ->frames
+         define-realizer define-performer
+         (for-syntax realize render assemble*))
 
 (module multi racket
 
@@ -146,7 +147,6 @@
     (syntax-parse expr
       [(id:id _ ...)
        (define trans (syntax-local-value #'id (λ () #f)))
-       (println trans)
        (match trans
          [(realizer t) (realize (t expr))]
          [_ expr])]
@@ -220,7 +220,6 @@
 (define/match* (perform1 (coord (app ->frames start) (app ->frames end)) expr env sound)
   (define len (- end start))
   (if (performable? expr) (rs-overlay (gen-perform expr start end) sound) sound))
-
 
 ;; perform a score in the given environment.
 (define (perform comp env)
