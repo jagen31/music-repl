@@ -7,7 +7,7 @@
          racket/generic)
 
 (provide coord tone rest
-         comp in ! offset loop music
+         comp in ! offset loop time-scale music music*
          tone rest note midi
          translate score-length
          merge1 merge
@@ -16,12 +16,15 @@
          perform1 perform
          FPS ->frames
          define-realizer define-performer
-         (for-syntax realize render assemble*))
+         coord
+         (for-syntax realize render assemble*
+                     current-env current-coordinate find-all
+                     within? scoord scoord-start scoord-end))
 
 (module multi racket
 
   (require fancy-app match-plus)
-  (provide tee score-length translate merge merge1 coord within?)
+  (provide tee score-length translate merge merge1 coord coord-start coord-end within?)
   
   (define (tee v) (println v) v)
 
@@ -49,7 +52,11 @@
                ([(k v) (in-dict comp1)] [e v])
       (merge1 k e acc))))
 
-(require 'multi (for-syntax (except-in 'multi coord) (rename-in 'multi [coord scoord])))
+(require 'multi (for-syntax (except-in 'multi coord)
+                            (rename-in 'multi
+                                       [coord scoord]
+                                       [coord-start scoord-start]
+                                       [coord-end scoord-end])))
 
 (define-for-syntax (find-all c0ord parser env)
   (for*/fold ([acc '()])
@@ -132,11 +139,30 @@
                       [_ #f])
                     (current-env)))]))
 
+(define-realizer time-scale
+  (syntax-parser
+    [(_ time*:number)
+     (define time (syntax->datum #'time*))
+     (match-define (and coord (scoord s* _)) (current-coordinate))
+     (render
+      (for/list ([(k v) (in-dict (current-env))] #:when (within? k coord))
+        (match k
+          [(scoord s e)
+           (define new-s (+ s (* (sub1 time) (- s s*))))
+           (cons (scoord new-s (+ new-s (* time (- e s)))) v)])))]))
+
 ;; embed a piece of music defined with `define-music` into a score.
 (define-realizer music
   (syntax-parser
-    [(_ id:id) (render (assemble* (syntax-local-value #'id)))]))
+    [(_ id:id) (render (assemble* (syntax-local-value #'id)))]
+    [(_ [exprs ...] ...) (render (assemble* (syntax->list #'((exprs ...) ...))))]))
 
+;; embed a piece of music defined with `define-music` into a score, keeping only
+;; the last layer
+(define-realizer music*
+  (syntax-parser
+    [(_ id:id) (render (assemble*/keep-last (syntax-local-value #'id)))]
+    [(_ [exprs ...] ...) (render (assemble*/keep-last (syntax->list #'((exprs ...) ...))))]))
 
 (define-realizer note
   (syntax-parser
@@ -199,7 +225,7 @@
        (cons #`([#,s #,end]
                 #,@(if for-performance
                        ;; TODO improve
-                       (filter (syntax-parser [(id _ ...) (syntax-local-value #'id (λ () #f))]) v)
+                       (filter (syntax-parser [(id:id _ ...) (syntax-local-value #'id (λ () #f))]) v)
                        v))
              acc)])))
 
@@ -255,6 +281,18 @@
      (define l (unrender (realize #`(comp ([#,start #,end] #,@layer)))))
      (parameterize ([current-env (merge (current-env) l)])
        (merge l (assemble* layers)))]
+    [_ '()]))
+
+(define-for-syntax (assemble*/keep-last comp)
+  (match comp
+    [(list* layer next more)
+     (match-define (scoord start end) (current-coordinate))
+     (define l (unrender (realize #`(comp ([#,start #,end] #,@layer)))))
+     (parameterize ([current-env (merge (current-env) l)])
+       (assemble*/keep-last (cons next more)))]
+    [(cons layer '())
+     (match-define (scoord start end) (current-coordinate))
+     (unrender (realize #`(comp ([#,start #,end] #,@layer))))]
     [_ '()]))
 
 ;; assemble a score within the given coordinate, resulting in a syntactic score.

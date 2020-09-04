@@ -16,9 +16,13 @@
   (values 246.94 261.63 293.66 329.63 349.23 392 440 493.88 523.25 587.33 659.26 698.46))
 
 (play (perform
-       (assemble-music [0 32]
-                       [(in [0 8] (seq C E G C+ E+))
-                        (in [8 16] (seq C D A D+ F+))
-                        (in [16 24] (seq B D G D+ F+))
-                        (in [24 32] (seq C E G C+ E+))]
-                       [(loop 4 (music snip))])))
+       (assemble-music [0 100]
+                       [(loop
+                         32
+                         (in [0 32]
+                             (music 
+                              [(in [0 8] (seq C E G C+ E+))
+                               (in [8 16] (seq C D A D+ F+))
+                               (in [16 24] (seq B D G D+ F+))
+                               (in [24 32] (seq C E G C+ E+))]
+                              [(loop 4 (music snip))])))])))
