@@ -1,0 +1,40 @@
+#lang racket
+(require "../music.rkt" rsound)
+
+;; Dance of Gold by Michiru Yamane
+(define-music theme
+  [(in [0 0.5] (note c 4))
+   (in [0.5 1.75] (note f 4))
+   (in [1.75 2] (note e 4))
+   (in [2 2.25] (note f 4))
+   (in [2.25 2.5] (note g 4))
+   (in [2.5 3] (note a -1 4))
+   (in [3 3.75] (note f 4))
+   (in [3.75 4] (note e -1 4))
+   (in [4 4.25] (note d -1 4))
+   (in [4.25 4.5] (note c 4))
+   (in [4.5 4.75] (note f 4))
+   (in [4.75 5] (note g 4))
+   (in [5 6] (note a -1 4))
+   (in [6 6.5] (note b -1 4))
+   (in [6.5 8] (note c 5))
+   (in [8 8.5] (note c 5))])
+
+(define-music accomp
+  [(in [0 0.5] (note c 3))
+   (in [0.5 2] (note f 3))
+   (in [1 1.5] (note a -1 3) (note c 4))
+   (in [1.5 2.5] (note b -1 3) (note d -1 4))
+   (in [2 2.5] (note c 3))
+   (in [2.5 4] (note f 3))
+   (in [3 3.5] (note a -1 3) (note c 4))
+   (in [3.5 4.5] (note g -1 3) (note b -1 3))
+   (in [4 4.5] (note c 3))
+   (in [4.5 5] (note f 3))
+   (in [5 5.5] (note a -1 3) (note c 4))
+   (in [5.5 6] (note e -1 3))
+   (in [6 6.5] (note g 3) (note b -1 3) (note e -1 4))
+   (in [6.5 7.5] (note a -1 3) (in [0.5 1] (note c 4) (note e -1 4)))
+   (in [7.5 8.5] (note a 3) (note e -1 4) (note f 1 4))])
+
+(play (perform (assemble-music [0 8.5] [(music theme) (music accomp)])))

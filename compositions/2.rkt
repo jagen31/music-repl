@@ -1,20 +1,6 @@
 #lang racket
 
-(require "../music.rkt" rsound rsound/piano-tones rsound/envelope
-         (for-syntax syntax/parse syntax/stx racket/match))
-
-(define-realizer note
-  (syntax-parser
-    [(_ pitch octave) #'(note pitch 0 octave)]
-    [(_ p accidental o)
-     #'(midi (+ (match 'p ['c 0] ['d 2] ['e 4] ['f 5] ['g 7] ['a 9] ['b 11]) accidental (* 12 o) 12))]))
-
-(define-performer (midi semitone start end)
-  (define len (- end start))
-  ((if (> start 0) (curry rs-append (silence start)) identity)
-   (rs-mult
-    (piano-tone semitone)
-    ((adsr 2 1.0 2 1.0 (round (* 1/4 len))) len))))
+(require "../music.rkt" rsound)
 
 (define-music accomp
   [(in [0 .75] (! 0))
@@ -42,7 +28,8 @@
   [(in [0 4] (loop 2 (music accomp))) (music motif2)])
 
 (play (perform
-       (assemble-score [0 8]
-                       [(music a1)]
-                       [(in [4 8] (music a2))])
-       '()))
+       (assemble-music [0 12]
+                       [(music a1)
+                        (in [4 8] (music a2))
+                        (in [8 10] (in [0 1] (note c 3)) (in [1 2] (note g 3)) (note e 4))
+                        (in [10 12] (note c 3) (note c 4))])))

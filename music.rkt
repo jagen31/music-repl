@@ -3,16 +3,16 @@
 (require (for-syntax fancy-app match-plus
                      racket/list racket/set racket/dict racket/match
                      syntax/parse syntax/stx syntax/id-table)
-         syntax/parse fancy-app match-plus rsound rsound/envelope
+         syntax/parse fancy-app match-plus rsound rsound/envelope rsound/piano-tones
          racket/generic)
 
 (provide coord tone rest
          comp in ! offset loop music
-         tone rest
+         tone rest note midi
          translate score-length
          merge1 merge
          define-music
-         assemble-score
+         assemble-music
          perform1 perform
          FPS ->frames
          define-realizer define-performer
@@ -137,9 +137,19 @@
   (syntax-parser
     [(_ id:id) (render (assemble* (syntax-local-value #'id)))]))
 
-#;(define-realizer note
+
+(define-realizer note
   (syntax-parser
-    [(_ pitch accidental octave)]))
+    [(_ pitch octave) #'(note pitch 0 octave)]
+    [(_ p accidental o)
+     #'(midi (+ (match 'p ['c 0] ['d 2] ['e 4] ['f 5] ['g 7] ['a 9] ['b 11]) accidental (* 12 o) 12))]))
+
+(define-performer (midi semitone start end)
+  (define len (- end start))
+  (values start
+          (rs-mult
+           (piano-tone semitone)
+           ((adsr 2 1.0 2 1.0 (round (* 1/4 len))) len))))
 
 ;; realize a score with the defined realizers.
 (define-for-syntax (realize expr)
@@ -179,7 +189,8 @@
     [(_ ([start end] exprs ...) ...)
      #'(list (cons (coord start end) (list exprs ...)) ...)]))
 
-;; convert a score value to a syntactic score.
+;; convert a score value to a syntactic score. If `for-performance` is true, all
+;; non-performable toplevels are removed
 (define-for-syntax (render comp #:for-performance [for-performance #f])
   (for/fold ([acc '()] #:result #`(comp #,@acc))
             ([(k v) (in-dict comp)])
@@ -187,7 +198,7 @@
       [(scoord s end)
        (cons #`([#,s #,end]
                 #,@(if for-performance
-                       ;; good enough for now
+                       ;; TODO improve
                        (filter (syntax-parser [(id _ ...) (syntax-local-value #'id (λ () #f))]) v)
                        v))
              acc)])))
@@ -207,25 +218,27 @@
 
 (define-performer (tone freq start end)
   (define len (- end start))
-  ((if (> start 0) (curry rs-append (silence start)) identity)
-   (rs-mult
-    (make-tone freq .2 len)
-    ((adsr 2 1.0 2 1.0 (round (* 1/4 len))) len))))
+  (values start
+          (rs-mult
+           (make-tone freq .2 len)
+           ((adsr 2 1.0 2 1.0 (round (* 1/4 len))) len))))
 
-(define-performer (rest start end)
-  ((if (> start 0) (curry rs-append (silence start)) identity)
-   (silence (- end start))))
+(define-performer (rest start end) (values start (silence (- end start))))
 
 ;; perform one expression using the defined performers.
-(define/match* (perform1 (coord (app ->frames start) (app ->frames end)) expr env sound)
+(define/match* (perform1 (coord (app ->frames start) (app ->frames end)) expr sound)
   (define len (- end start))
-  (if (performable? expr) (rs-overlay (gen-perform expr start end) sound) sound))
+  (cond [(performable? expr)
+         (define-values (start* sound*) (gen-perform expr start end))
+         (rs-overlay ((if (> start* 0) (curry rs-append (silence start*)) identity) sound*)
+                     sound)]
+        [else (error 'perform "cannot perform ~s" expr)]))
 
-;; perform a score in the given environment.
-(define (perform comp env)
+;; perform a score.
+(define (perform comp)
   (for*/fold ([acc (silence 1)])
              ([(k v) (in-dict comp)] [e v])
-    (perform1 k e env acc)))
+    (perform1 k e acc)))
 
 ;; define a syntax value containing layers, which can later be assembled into music.
 (define-syntax define-music
@@ -245,7 +258,7 @@
     [_ '()]))
 
 ;; assemble a score within the given coordinate, resulting in a syntactic score.
-(define-syntax assemble-score
+(define-syntax assemble-music
   (syntax-parser
     [(_ [start end] clauses ...)
      (parameterize ([current-coordinate (scoord (syntax->datum #'start) (syntax->datum #'end))])
