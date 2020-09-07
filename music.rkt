@@ -1,16 +1,17 @@
 #lang racket
 
 (require (for-syntax fancy-app match-plus
-                     racket/list racket/set racket/dict racket/match
+                     racket/list racket/set racket/dict racket/match racket/struct-info
+                     (only-in racket/control abort)
                      syntax/parse syntax/stx)
          syntax/parse fancy-app match-plus rsound rsound/envelope rsound/piano-tones
          racket/generic)
 
 (provide coord tone rest
-         comp in ! offset loop time-scale music music* --
+         comp in ! loop time-scale do do* -- seq
          tone rest note midi
          define-music
-         assemble-music
+         music
          perform1 perform
          FPS ->frames
          define-realizer define-performer
@@ -26,6 +27,8 @@
 (begin-for-syntax
 
   (struct realizer [trans] #:transparent)
+  (struct literal [] #:transparent)
+  (struct music/s [layers] #:transparent)
   (struct scoord [start end start-stx end-stx] #:transparent)
 
   (define current-coordinate (make-parameter (scoord 0 +inf.0 #f #f)))
@@ -37,7 +40,8 @@
     (and (>= s1 s2) (<= e1 e2) (not (= s1 e2))))
 
   (define (score-coord comp)
-    (for/fold ([m1n +inf.0] [min-stx #f] [m4x -inf.0] [max-stx #f] #:result (scoord m1n m4x min-stx max-stx))
+    (for/fold ([m1n +inf.0] [min-stx #f] [m4x -inf.0] [max-stx #f]
+               #:result (scoord m1n m4x min-stx max-stx))
               ([k (in-dict-keys comp)])
       (match k [(scoord s e ss es)
                 (define-values (m1n* min-stx*)
@@ -69,72 +73,48 @@
                ([(k v) (in-dict env)] #:when (within? c0ord k) [e v])
       (define result (parser e))
       (if result (cons result acc) acc)))
-
-  (define (find-length exprs [err (λ () (error 'find-length "no exprs have a length"))])
-    (define realized (map realize/stop exprs))
-    (or (for/fold ([m4x #f])
-                  ([expr realized])
-          (syntax-parse expr
-            [({~datum comp} _ ...)
-             (define len (scoord-end (score-coord (unrender expr))))
-             (if m4x (max m4x len) len)]
-            [_ m4x]))
-        (err)))
   
   ;; realize a score with the defined realizers.
   (define (realize expr)
-    (define expr*
-      (syntax-parse expr
-        [(id:id _ ...)
-         (define trans (syntax-local-value #'id (λ () #f)))
-         (match trans
-           [(realizer t) (realize (t expr))]
-           [_ expr])]
-        [_ expr]))
-    (syntax-parse expr*
-      [({~datum comp} clause ...)
+    (syntax-parse expr
+      [({~datum comp} clause* ...)
        (render
-      (for/fold ([acc '()])
-                ([clause (syntax->list #'(clause ...))])
-        (syntax-parse clause
-          [([startp endp] exprs ...)
-           (match-define (list start end) (map syntax->datum (list #'startp #'endp)))
-           (define (make-clauses expr)
-             (syntax-parse expr
-               [({~datum comp} clauses ...)
-                (for/list ([clause (syntax->list #'(clauses ...))])
-                  (syntax-parse clause
-                    [([start*p end*p] exprs ...)
-                     (match-define (list start* end*) (map syntax->datum (list #'start*p #'end*p)))
-                     (when (> end* end)
-                       (raise-syntax-error 'realize
-                                           (format "inner coordinate ends after outer. Max: ~s, Received: ~s" end end*)
-                                           #'end*p))
-                     (cons (scoord start* end* #'start*p #'end*p)
-                           (syntax->list #'(exprs ...)))]))]
-               [expr (list (cons (scoord start end #'startp #'endp)
-                                 (list #'expr)))]))
-           (parameterize ([current-coordinate (scoord start end #'startp #'endp)])
-             (foldr merge acc (stx-map (compose make-clauses realize) #'(exprs ...))))])))]
+        (for/fold ([acc '()])
+                  ([clause (syntax->list #'(clause* ...))])
+          ;; TODO make a syntax class
+          (syntax-parse clause
+            [([startp endp] exprs ...)
+             (match-define (list start end) (map syntax->datum (list #'startp #'endp)))
+             (define (make-clauses expr)
+               (syntax-parse expr
+                 [({~datum comp} clauses ...)
+                  (for/list ([clause (syntax->list #'(clauses ...))])
+                    (syntax-parse clause
+                      [([start*p end*p] exprs ...)
+                       (match-define (list start* end*) (map syntax->datum (list #'start*p #'end*p)))
+                       (when (> end* end)
+                         (raise-syntax-error
+                          'realize
+                          (format "inner coordinate ends after outer. Max: ~s, Received: ~s" end end*)
+                          #'end*p))
+                       (cons (scoord start* end* #'start*p #'end*p) (syntax->list #'(exprs ...)))]))]
+                 [expr (list (cons (scoord start end #'startp #'endp)
+                                   (list #'expr)))]))
+             (parameterize ([current-coordinate (scoord start end #'startp #'endp)])
+               (foldr merge acc (stx-map (compose make-clauses realize) #'(exprs ...))))])))]
+      [(id:id exprs ...)
+       (define trans (syntax-local-value #'id (λ () #f)))
+       (match trans
+         [(literal) expr]
+         [(realizer t) (realize (t expr))]
+         [_ #`(#,@(stx-map realize #'(id exprs ...)))])]
       [(exprs ...) #`(#,@(stx-map realize #'(exprs ...)))]
-      [_ expr*]))
-
-  ;; realize a score with the defined realizers, stopping at syntactic compositions.
-  (define (realize/stop expr)
-    (define expr*
-      (syntax-parse expr
-        [(id:id _ ...)
-         (define trans (syntax-local-value #'id (λ () #f)))
-         (match trans
-           [(realizer t) (realize (t expr))]
+      [expr*:id
+       (match (syntax-local-value #'expr* (λ () #f))
+         [(music/s m) (realize m)]
          [_ expr])]
-        [_ expr]))
-    (syntax-parse expr*
-      [({~datum comp} clause ...) expr*]
-      [(exprs ...) #`(#,@(stx-map realize #'(exprs ...)))]
-      [_ expr*]))
+      [_ expr]))
 
-  
   ;; convert a score value to a syntactic score. If `for-performance` is true, all
   ;; non-performable toplevels are removed
   (define (render comp #:for-performance [for-performance #f])
@@ -146,8 +126,12 @@
                        [e* (datum->syntax es e es)])
            (cons #`([s* e*]
                     #,@(if for-performance
-                           ;; TODO improve
-                           (filter (syntax-parser [(id:id _ ...) (syntax-local-value #'id (λ () #f))]) v)
+                           (filter (syntax-parser
+                                     [(id:id _ ...)
+                                      (define info (syntax-local-value #'id (λ () #f)))
+                                      (and (struct-info? info)
+                                           (free-identifier=? #'performer (sixth (extract-struct-info info))))])
+                                   v)
                            v))
                  acc))])))
   
@@ -162,11 +146,12 @@
       [_ (error 'unrender "can only unrender a comp")])))
 
 (define-generics performable (gen-perform performable start end))
+(struct performer [] #:transparent)
 
 (define-syntax define-performer
   (syntax-parser
     [(_ (id:id fields ... {~and {~datum start} start} {~and {~datum end} end}) body ...)
-     #'(struct id [fields ...] #:transparent
+     #'(struct id performer [fields ...] #:transparent
          #:methods gen:performable
          [(define/match* (gen-perform (id fields ...) start end) body ...)])]))
 
@@ -175,6 +160,10 @@
     [(_ id:id parser)
      #'(define-syntax id (realizer parser))]))
 
+(define-syntax define-literal
+  (syntax-parser
+    [(_ id:id) #'(define-syntax id (literal))]))
+
 ;; make coordinates be relative to parent coordinates
 (define-realizer in
   (syntax-parser
@@ -182,70 +171,58 @@
      (match-define (scoord start end _ _) (current-coordinate))
      (with-syntax ([start* (datum->syntax #'off-startp (+ start (syntax->datum #'off-startp)) #'off-startp)]
                    [end* (datum->syntax #'off-endp (+ start (syntax->datum #'off-endp)) #'off-endp)])
-       #`(comp ([start* end*] #,@(syntax->list #'(exprs ...)))))]))
+       #`(comp ([start* end*] exprs ...)))]))
 
 ;; loop a fragment as many times as possible in the surrounding space.
 (define-realizer loop
   (syntax-parser
     [(_ {~optional length*:number #:defaults ([length* #'#f])} exprs ...)
      (match-define (scoord start end ss es) (current-coordinate))
-     (define length (or (syntax->datum #'length*)
-                        (find-length (syntax->list #'(exprs ...)))))
-     (realize
-      (render
-       ;; TODO improve
-       (for/fold ([acc '()]
-                  [prev (translate (list (cons (scoord start end ss es)
-                                               (syntax->list #'(exprs ...))))
-                                   (- length))]
-                  #:result acc)
-                 ([i (in-range (floor (/ (- end start) length)))])
-         (define new (translate prev length))
-         (values (merge new acc) new))))]))
+     (define length (syntax->datum #'length*))
+     (render
+      ;; TODO improve
+      (for/fold ([acc '()]
+                 [prev (translate (list (cons (scoord start end ss es)
+                                              (syntax->list #'(exprs ...))))
+                                  (- length))]
+                 #:result acc)
+                ([i (in-range (floor (/ (- end start) length)))])
+        (define new (translate prev length))
+        (values (merge new acc) new)))]))
 
-;; translate a score
-(define-realizer offset
-  (syntax-parser
-    [(_ n)
-     (for/fold ([acc '()])
-               ([(k v) (in-dict (current-env))] #:when (within? k (current-coordinate)))
-       (define tones (filter (compose (eq? _'tone) car syntax->datum) v))
-       (cons (cons k (map (syntax-parser [({~datum tone} expr*) #'(tone (+ expr* n))])
-                          tones))
-             acc))]))
+(define-literal seq)
 
-;; try to get a value from a sequence in the current environment.
+;; try to get a value from a seq in the current environment.
 (define-realizer !
   (syntax-parser
-    [(_ ix)
-     (car (find-all (current-coordinate)
-                    (syntax-parser
-                      [({~datum seq} exprs ...)
-                       (list-ref (syntax->list #'(exprs ...))
-                                 (syntax->datum #'ix))]
-                      [_ #f])
-                    (current-env)))]))
+    [(_ ix:number)
+     (define found
+       (find-all (current-coordinate)
+                 (syntax-parser
+                   [({~datum seq} exprs ...) (syntax->list #'(exprs ...))]
+                   [_ #f])
+                 (current-env)))
+     (if (null? found)
+         (raise-syntax-error '! "no sequences in scope" this-syntax)
+         (list-ref (car found) (syntax->datum #'ix)))]))
 
 (define-realizer --
-  (λ (stx)
-    (syntax-parse stx
-      [(_ {~optional start:number #:defaults ([start #'0])} clauses* ...)
-       (define-values (result end)
-         (for/fold ([clauses '()] [current (syntax->datum #'start)])
-                   ([clause (syntax->list #'(clauses* ...))])
-           (syntax-parse clause
-             [({~optional l*:number #:defaults ([l* #'#f])} exprs ...)
-              (define next
-                (+ current
-                   (or (syntax->datum #'l*)
-                       (find-length (syntax->list #'(exprs ...))))))
-              (with-syntax ([current* (datum->syntax #'l* current #'l*)]
-                            [next* (datum->syntax #'l* next #'l*)])
-                (values (cons #`(in [current* next*] exprs ...) clauses)
-                        next))])))
-       (with-syntax ([end* (datum->syntax stx end stx)]
-                     [(result* ...) (datum->syntax stx result stx)])
-         #`(comp ([start end*] result* ...)))])))
+  (syntax-parser
+    [(_ {~optional start*:number #:defaults ([start* #'0])} clauses* ...)
+     (define start (syntax->datum #'start*))
+     (define-values (result end)
+       (for/fold ([clauses '()] [current 0])
+                 ([clause (syntax->list #'(clauses* ...))])
+         (syntax-parse clause
+           [(l*:number exprs ...)
+            (define next (+ current (syntax->datum #'l*)))
+            (with-syntax ([current* (datum->syntax #'l* current #'l*)]
+                          [next* (datum->syntax #'l* next #'l*)])
+              (values (cons #`(in [current* next*] exprs ...) clauses)
+                      next))])))
+     (with-syntax ([end* (datum->syntax this-syntax (+ end start) this-syntax)]
+                   [(result* ...) (datum->syntax this-syntax result this-syntax)])
+       #`(in [start* end*] result* ...))]))
 
 (define-realizer time-scale
   (syntax-parser
@@ -260,16 +237,14 @@
            (cons (scoord new-s (+ new-s (* time (- e s))) ss es) v)])))]))
 
 ;; embed a piece of music defined with `define-music` into a score.
-(define-realizer music
+(define-realizer do
   (syntax-parser
-    [(_ id:id) (render (assemble* (syntax-local-value #'id)))]
     [(_ [exprs ...] ...) (render (assemble* (syntax->list #'((exprs ...) ...))))]))
 
 ;; embed a piece of music defined with `define-music` into a score, keeping only
 ;; the last layer
-(define-realizer music*
+(define-realizer do*
   (syntax-parser
-    [(_ id:id) (render (assemble*/keep-last (syntax-local-value #'id)))]
     [(_ [exprs ...] ...) (render (assemble*/keep-last (syntax->list #'((exprs ...) ...))))]))
 
 (define-realizer note
@@ -323,9 +298,7 @@
 
 ;; define a syntax value containing layers, which can later be assembled into music.
 (define-syntax define-music
-  (syntax-parser
-    [(_ name exprs ...)
-     #'(define-syntax name (syntax->list #'(exprs ...)))]))
+  (syntax-parser [(_ name expr) #`(define-syntax name #,(music/s #'expr))]))
 
 ;; realize a composition by layer, using the cumulative result as the environment
 ;; for the next layer.  Results in a score value.
@@ -337,8 +310,7 @@
        (with-syntax ([s* (datum->syntax ss start ss)]
                      [e* (datum->syntax es end es)])
          (unrender (realize #`(comp ([s* e*] #,@layer))))))
-     (parameterize ([current-env (merge (current-env) l)])
-       (merge l (assemble* layers)))]
+     (parameterize ([current-env (merge (current-env) l)]) (merge l (assemble* layers)))]
     [_ '()]))
 
 (define-for-syntax (assemble*/keep-last comp)
@@ -362,8 +334,4 @@
     [_ '()]))
 
 ;; assemble a score within the given coordinate, resulting in a syntactic score.
-(define-syntax assemble-music
-  (syntax-parser
-    [(_ {~optional [start:number end:number] #:defaults ([start #'0] [end #'+inf.0])} clauses ...)
-     (parameterize ([current-coordinate (scoord (syntax->datum #'start) (syntax->datum #'end) #'start #'end)])
-       (render (assemble* (syntax->list #'(clauses ...))) #:for-performance #t))]))
+(define-syntax music (syntax-parser [(_ expr) (render (unrender (realize #'expr)) #:for-performance #t)]))
