@@ -8,7 +8,7 @@
          racket/generic)
 
 (provide coord tone rest
-         comp in ! loop time-scale do do* -- seq
+         comp in ! loop time-scale do do* -- seq restrict
          tone rest note midi
          define-music
          music
@@ -214,12 +214,27 @@
        (for/fold ([clauses '()] [current 0])
                  ([clause (syntax->list #'(clauses* ...))])
          (syntax-parse clause
-           [(l*:number exprs ...)
+           [(l*:number {~optional {~or* {~or {~seq #:elide elide*:number}
+                                             {~seq #:overlap overlap*:number}}
+                                        {~seq #:elide-left elidel*:number}}} exprs ...)
             (define next (+ current (syntax->datum #'l*)))
-            (with-syntax ([current* (datum->syntax #'l* current #'l*)]
-                          [next* (datum->syntax #'l* next #'l*)])
-              (values (cons #`(in [current* next*] exprs ...) clauses)
-                      next))])))
+            (let-values ([(start start-stx)
+                           (if (attribute elidel*)
+                               (values (+ current (syntax-e #'elidel*)) #'elidel*)
+                               (values current #'l*))]
+                          [(end end-stx)
+                           (if (attribute elide*)
+                               (values (- next (syntax-e #'elide*)) #'elide*)
+                               (values next #'l*))])
+              (with-syntax ([current* (datum->syntax #'l* current #'l*)]
+                            [next* (datum->syntax #'l* next #'l*)]
+                            [start* (datum->syntax start-stx start start-stx)]
+                            [end* (datum->syntax end-stx end end-stx)])
+                (values (cons #`(do* [(in [current* next*] exprs ...)]
+                                     [(restrict start* end*)])
+                              clauses)
+                        (+ next (- current start) (- end next)
+                           (if (attribute overlap*) (- (syntax->datum #'overlap*)) 0)))))])))
      (with-syntax ([end* (datum->syntax this-syntax (+ end start) this-syntax)]
                    [(result* ...) (datum->syntax this-syntax result this-syntax)])
        #`(in [start* end*] result* ...))]))
@@ -235,6 +250,15 @@
           [(scoord s e ss es)
            (define new-s (+ s (* (sub1 time) (- s s*))))
            (cons (scoord new-s (+ new-s (* time (- e s))) ss es) v)])))]))
+
+(define-realizer restrict
+  (syntax-parser
+    [(_ start:number end:number)
+     (match-define (scoord start* _ _ _) (current-coordinate))
+     (render (filter (compose (within? _ (scoord (+ (syntax->datum #'start) start*)
+                                                 (+ (syntax->datum #'end) start*) #f #f))
+                              car)
+                     (current-env)))]))
 
 ;; embed a piece of music defined with `define-music` into a score.
 (define-realizer do
